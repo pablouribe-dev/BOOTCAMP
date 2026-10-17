@@ -189,8 +189,20 @@ Cada repo muestra su reporte de cobertura en `docs/coverage.png`.
 - [`bank-postman`](bank-postman/README.md): colecciones, environment `bank-local`
   y scripts equivalentes con curl.
 
-## Fuera de alcance (Parte III)
+## Funcionalidades no incluidas
 
-Refresh tokens, recuperacion y revocacion de contrasenas; recarga de saldo Yanki;
-tarjetas de credito en Yanki; cobro automatico de mantenimiento; Kafka
-exactly-once (se usa at-least-once con idempotencia).
+Las Partes I, II y III estan implementadas completas. Lo siguiente queda fuera
+porque la guia de la Parte III lo excluye explicitamente:
+
+- Refresh tokens, recuperacion y revocacion de contrasenas.
+- Recarga de saldo del monedero Yanki.
+- Tarjetas de credito asociadas a Yanki.
+- Cobro automatico de la comision de mantenimiento.
+- Kafka exactly-once: se usa at-least-once con consumidores idempotentes.
+
+### Limitaciones conocidas
+
+- Si el deposito de un pago Yanki llega despues de que el pago vencio, queda para
+  revision manual.
+- Un evento de deuda saldada (`CLEARED`) que se pierda no se vuelve a publicar.
+- `bank-auth-service` no valida que el `customerId` del usuario exista (no usa REST).
