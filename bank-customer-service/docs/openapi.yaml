@@ -1,0 +1,354 @@
+openapi: 3.0.3
+info:
+  title: bank-customer-service
+  description: |
+    Parte III: todas las rutas pasan por el API Gateway con JWT (Bearer). Sin token o con
+    token invalido o vencido responde 401; con rol insuficiente (USER en PUT o DELETE, o
+    rutas de ADMIN) responde 403.
+
+    Microservicio de clientes personales y empresariales. Es la fuente de verdad
+    del tipo de cliente, que consultan los servicios de cuentas, creditos y
+    tarjetas de credito.
+  version: 3.0.0
+security:
+  - bearerAuth: []
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8081
+    description: Directo al servicio (desarrollo)
+tags:
+  - name: Customers
+    description: CRUD de clientes
+  - name: Admin
+    description: Parte III - administracion (rol ADMIN)
+
+paths:
+  /customers:
+    post:
+      tags: [Customers]
+      summary: Crear un cliente
+      description: El perfil debe ser compatible con el tipo de cliente (VIP solo PERSONAL, PYME solo BUSINESS).
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+            example:
+              type: PERSONAL
+              documentType: DNI
+              documentNumber: "45678912"
+              name: Ana Torres
+              email: ana.torres@example.com
+              phoneNumber: "999888777"
+              address: Av. Siempre Viva 123
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          description: Cliente creado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [Customers]
+      summary: Listar todos los clientes, o buscar uno por documento
+      description: Parte III - con `documentNumber` la busqueda usa la cache Redis (clave customer:doc:{documentNumber}).
+      operationId: findAllCustomers
+      parameters:
+        - name: documentNumber
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "45678912"
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Lista de clientes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomerResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /customers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    get:
+      tags: [Customers]
+      summary: Buscar un cliente por id
+      operationId: findCustomerById
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Cliente encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Customers]
+      summary: Actualizar un cliente
+      description: Si cambia documentNumber, se verifica que el nuevo valor no este en uso.
+      operationId: updateCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Cliente actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Customers]
+      summary: Eliminar un cliente
+      operationId: deleteCustomer
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '204':
+          description: Cliente eliminado
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/events/republish:
+    post:
+      tags: [Admin]
+      summary: Republicar CUSTOMER_UPSERTED de todos los clientes (ADMIN)
+      description: |
+        Parte III. Vuelve a publicar un snapshot por cada cliente guardado en
+        bank.customer.events, para poblar las copias locales de otros servicios. En el
+        gateway se expone como POST /admin/customers/events/republish.
+      operationId: republishCustomerEvents
+      responses:
+        '200':
+          description: Eventos publicados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepublishResponse'
+              example:
+                eventType: CUSTOMER_UPSERTED
+                republished: 42
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token de POST /auth/login (bank-auth-service), validado por el gateway.
+  parameters:
+    CustomerId:
+      name: id
+      in: path
+      required: true
+      description: Identificador del cliente
+      schema:
+        type: string
+        example: 68f0a1b2c3d4e5f6a7b8c9d0
+
+  schemas:
+    CustomerType:
+      type: string
+      enum: [PERSONAL, BUSINESS]
+    DocumentType:
+      type: string
+      enum: [DNI, CEX, PASSPORT, RUC]
+    CustomerProfile:
+      type: string
+      description: |
+        Perfil comercial. STANDARD sirve para cualquier tipo de cliente; VIP solo
+        para PERSONAL y PYME solo para BUSINESS (otra combinacion: 409).
+      enum: [STANDARD, VIP, PYME]
+
+    CustomerRequest:
+      type: object
+      required: [type, documentType, documentNumber, name]
+      properties:
+        type:
+          $ref: '#/components/schemas/CustomerType'
+        documentType:
+          $ref: '#/components/schemas/DocumentType'
+        documentNumber:
+          type: string
+          maxLength: 20
+          description: Unico en todo el sistema
+        name:
+          type: string
+          description: Nombre completo o razon social
+        email:
+          type: string
+          format: email
+        phoneNumber:
+          type: string
+        address:
+          type: string
+        profile:
+          $ref: '#/components/schemas/CustomerProfile'
+
+    CustomerResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          $ref: '#/components/schemas/CustomerType'
+        documentType:
+          $ref: '#/components/schemas/DocumentType'
+        documentNumber:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        phoneNumber:
+          type: string
+        address:
+          type: string
+        profile:
+          $ref: '#/components/schemas/CustomerProfile'
+        createdAt:
+          type: string
+          format: date-time
+
+    RepublishResponse:
+      type: object
+      properties:
+        eventType:
+          type: string
+          example: CUSTOMER_UPSERTED
+        republished:
+          type: integer
+          format: int64
+          example: 42
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Sin token, o token invalido o vencido (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 401
+            error: Unauthorized
+            message: Missing, invalid or expired token
+            path: /customers
+    Forbidden:
+      description: Rol insuficiente o endpoint interno (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 403
+            error: Forbidden
+            message: Insufficient role for this operation
+            path: /customers/68f0a1b2c3d4e5f6a7b8c9d0
+    BadRequest:
+      description: Validacion de entrada fallida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-16T10:15:30.123'
+            status: 400
+            error: Bad Request
+            message: 'type: type is required'
+            path: /customers
+    NotFound:
+      description: Cliente inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-16T10:15:30.123'
+            status: 404
+            error: Not Found
+            message: Customer not found with id 68f0a1b2c3d4e5f6a7b8c9d0
+            path: /customers/68f0a1b2c3d4e5f6a7b8c9d0
+    Conflict:
+      description: Regla de negocio violada (documentNumber duplicado o perfil incompatible con el tipo)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-16T10:15:30.123'
+            status: 409
+            error: Conflict
+            message: A customer with documentNumber 45678912 already exists
+            path: /customers
+    InternalError:
+      description: Error inesperado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

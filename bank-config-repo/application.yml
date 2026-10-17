@@ -1,0 +1,108 @@
+# Propiedades compartidas por todos los microservicios del banco.
+# El Config Server sirve este archivo a cualquier aplicacion, y luego le
+# superpone el archivo <spring.application.name>.yml correspondiente.
+#
+# Los valores ${VAR:valor} permiten que Docker los sobrescriba con variables de
+# entorno sin tocar el codigo.
+#
+# La conexion a MongoDB NO va aqui: cada servicio define su propia
+# spring.data.mongodb.uri con su base de datos (regla database per service).
+
+# --- Registro en Eureka ------------------------------------------------------
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+  instance:
+    # Registrar la IP en lugar del hostname: funciona igual en local y en Docker.
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+
+# --- Resilience4j: valores por defecto de todas las instancias -----------------
+# Cada cliente crea una instancia por servicio destino (bank-customer-service,
+# bank-account-service, ...) que hereda esta configuracion "default".
+resilience4j:
+  timelimiter:
+    configs:
+      default:
+        timeout-duration: 2s
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true
+
+# --- Actuator: health para Eureka y los healthchecks de Docker ----------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,circuitbreakers
+  endpoint:
+    health:
+      show-details: always
+  health:
+    circuitbreakers:
+      enabled: true
+
+# --- Kafka (Parte III): comun a todos los servicios que lo usan ---------------
+# Cada servicio agrega en su propio .yml el tipo por defecto del sobre
+# (spring.kafka.consumer.properties.spring.json.value.default.type) y sus topics
+# (bank.kafka.*). Los type headers van desactivados porque cada servicio tiene
+# sus propias clases, en paquetes distintos.
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      properties:
+        spring.json.add.type.headers: false
+        # Si el broker no responde, fallar rapido en vez de esperar 60 s.
+        max.block.ms: 5000
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
+    consumer:
+      group-id: ${spring.application.name}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # ErrorHandlingDeserializer: un mensaje ilegible va al DLT en vez de
+      # bloquear la particion.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.use.type.headers: false
+        # Ver particiones nuevas de un topic en 30 s (por defecto 5 min).
+        metadata.max.age.ms: 30000
+
+bank:
+  kafka:
+    partitions: 3
+    replicas: 1
+    retry:
+      initial-interval: 1s
+      multiplier: 2.0
+      max-retries: 3
+    # Nombres de todos los topics del sistema (catalogo en bank-docs/docs/events.md).
+    topics:
+      customer-events: bank.customer.events
+      account-events: bank.account.events
+      debt-events: bank.debt.events
+      debit-card-events: bank.debit-card.events
+      operation-requests: bank.account.operation-requests
+      operation-results: bank.account.operation-results
+      yanki-events: bank.yanki.events
+
+logging:
+  level:
+    org.apache.kafka: WARN
+    root: INFO
+    com.bank: DEBUG
+    org.springframework.data.mongodb.core.ReactiveMongoTemplate: INFO
+    com.netflix.discovery: WARN

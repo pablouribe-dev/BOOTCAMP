@@ -1,0 +1,465 @@
+openapi: 3.0.3
+info:
+  title: bank-debit-card-service
+  description: |
+    Parte III. Tarjetas de debito asociadas a cuentas y pagos con tarjeta.
+
+    No llama a otros microservicios por REST: valida contra copias locales
+    (customers_replica, accounts_replica, overdue_debts) alimentadas por Kafka, y
+    cobra los pagos pidiendo retiros por Kafka (bank.account.operation-requests).
+    El saldo de la tarjeta es el de su cuenta principal: GET /accounts/{mainAccountId}/balance.
+  version: 3.0.0
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8087
+    description: Directo al servicio (desarrollo)
+security:
+  - bearerAuth: []
+tags:
+  - name: DebitCards
+    description: CRUD y cuentas asociadas
+  - name: Payments
+    description: Pagos con tarjeta (asincronos, 202)
+
+paths:
+  /debit-cards:
+    post:
+      tags: [DebitCards]
+      summary: Emitir una tarjeta de debito
+      description: |
+        Reglas (todas contra copias locales): el cliente existe, todas las cuentas existen
+        y son del cliente, la principal esta entre ellas y el cliente no tiene deuda vencida.
+      operationId: createDebitCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DebitCardRequest'
+            example:
+              customerId: 68f0a1b2c3d4e5f6a7b8c9d0
+              accountIds: [68f0c3d4e5f6a7b8c9d0e1f2, 68f0c3d4e5f6a7b8c9d0e1f3]
+              mainAccountId: 68f0c3d4e5f6a7b8c9d0e1f2
+      responses:
+        '201':
+          description: Tarjeta creada (numero de 16 digitos generado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitCardResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [DebitCards]
+      summary: Listar tarjetas
+      operationId: findDebitCards
+      parameters:
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tarjetas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DebitCardResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /debit-cards/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    get:
+      tags: [DebitCards]
+      summary: Buscar una tarjeta
+      operationId: findDebitCard
+      responses:
+        '200':
+          description: Tarjeta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitCardResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [DebitCards]
+      summary: Actualizar cuentas, principal y estado (ADMIN)
+      description: El cliente no cambia (409). Se validan las cuentas como al crear.
+      operationId: updateDebitCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DebitCardRequest'
+      responses:
+        '200':
+          description: Tarjeta actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitCardResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [DebitCards]
+      summary: Eliminar una tarjeta (ADMIN)
+      operationId: deleteDebitCard
+      responses:
+        '204':
+          description: Eliminada (publica DEBIT_CARD_DELETED)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /debit-cards/{id}/accounts:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    post:
+      tags: [DebitCards]
+      summary: Asociar otra cuenta del mismo cliente
+      description: Se agrega al final del orden. Si la tarjeta estaba INACTIVE, la cuenta pasa a ser la principal.
+      operationId: addAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountLinkRequest'
+      responses:
+        '200':
+          description: Tarjeta actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitCardResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /debit-cards/{id}/main-account:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    put:
+      tags: [DebitCards]
+      summary: Cambiar la cuenta principal (ADMIN)
+      operationId: changeMainAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountLinkRequest'
+      responses:
+        '200':
+          description: Tarjeta actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitCardResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /debit-cards/{id}/payments:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+    post:
+      tags: [Payments]
+      summary: Pagar con la tarjeta (asincrono)
+      description: |
+        Crea el pago en PENDING y pide un retiro a la cuenta principal. Si se rechaza
+        por fondos, intenta con la siguiente cuenta asociada, en orden; si no quedan,
+        el pago termina FAILED. Consultar el estado con el GET del pago.
+      operationId: payWithDebitCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DebitPaymentRequest'
+            example:
+              amount: 80
+              description: supermercado
+      responses:
+        '202':
+          description: Pago aceptado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitPaymentResponse'
+              example:
+                paymentId: 6ad38adca5effb47307d298d
+                cardId: 6ad38ad9a5effb47307d298c
+                amount: 80
+                status: PENDING
+                attemptedAccountIds: [68f0c3d4e5f6a7b8c9d0e1f2]
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          description: Kafka no acepto la peticion (el pago queda FAILED con KAFKA_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Payments]
+      summary: Listar pagos de la tarjeta
+      operationId: findPayments
+      responses:
+        '200':
+          description: Pagos, del mas reciente al mas antiguo
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DebitPaymentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /debit-cards/{id}/payments/{paymentId}:
+    parameters:
+      - $ref: '#/components/parameters/CardId'
+      - name: paymentId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Payments]
+      summary: Estado de un pago
+      operationId: findPayment
+      responses:
+        '200':
+          description: Pago
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitPaymentResponse'
+              example:
+                paymentId: 6ad38adca5effb47307d298d
+                cardId: 6ad38ad9a5effb47307d298c
+                amount: 80
+                status: COMPLETED
+                attemptedAccountIds: [68f0c3d4e5f6a7b8c9d0e1f2, 68f0c3d4e5f6a7b8c9d0e1f3]
+                chargedAccountId: 68f0c3d4e5f6a7b8c9d0e1f3
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    CardId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    CardStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    PaymentStatus:
+      type: string
+      enum: [PENDING, COMPLETED, FAILED]
+    DebitCardRequest:
+      type: object
+      required: [customerId, accountIds, mainAccountId]
+      properties:
+        customerId:
+          type: string
+        accountIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: En orden de asociacion (define el orden del fallback)
+        mainAccountId:
+          type: string
+        status:
+          $ref: '#/components/schemas/CardStatus'
+    AccountLinkRequest:
+      type: object
+      required: [accountId]
+      properties:
+        accountId:
+          type: string
+    DebitCardResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        cardNumber:
+          type: string
+          example: '5555042871904413'
+        customerId:
+          type: string
+        accountIds:
+          type: array
+          items:
+            type: string
+        mainAccountId:
+          type: string
+        status:
+          $ref: '#/components/schemas/CardStatus'
+        createdAt:
+          type: string
+          format: date-time
+    DebitPaymentRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        description:
+          type: string
+    DebitPaymentResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        cardId:
+          type: string
+        amount:
+          type: number
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        attemptedAccountIds:
+          type: array
+          items:
+            type: string
+        chargedAccountId:
+          type: string
+        failureReason:
+          type: string
+          example: INSUFFICIENT_FUNDS
+        createdAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+  responses:
+    BadRequest:
+      description: Validacion fallida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Sin token o token invalido o vencido (gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Rol insuficiente (gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Tarjeta, pago, cliente o cuenta inexistente (en las copias locales)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 404
+            error: Not Found
+            message: Customer not found with id 000000000000000000000000
+            path: /debit-cards
+    Conflict:
+      description: Regla de negocio violada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            overdueDebt:
+              summary: Cliente con deuda vencida
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Customer 68f0a1b2c3d4e5f6a7b8c9d0 has an overdue debt and cannot acquire new products
+                path: /debit-cards
+            foreignAccount:
+              summary: Cuenta de otro cliente
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Account 68f0c3d4e5f6a7b8c9d0e1f9 does not belong to customer 68f0a1b2c3d4e5f6a7b8c9d0
+                path: /debit-cards
+            inactiveCard:
+              summary: Pago con tarjeta inactiva
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Debit card 6ad38ad9a5effb47307d298c is not active
+                path: /debit-cards/6ad38ad9a5effb47307d298c/payments

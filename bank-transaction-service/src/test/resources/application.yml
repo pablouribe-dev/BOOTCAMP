@@ -1,0 +1,13 @@
+# Configuracion de tests: reemplaza al application.yml principal para que los
+# tests no dependan del Config Server, de Eureka ni de MongoDB.
+spring:
+  application:
+    name: bank-transaction-service
+  cloud:
+    config:
+      enabled: false
+    discovery:
+      enabled: false
+eureka:
+  client:
+    enabled: false

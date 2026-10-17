@@ -1,0 +1,11 @@
+# Unica configuracion local: el nombre y donde esta el Config Server.
+# Puerto y rutas llegan desde bank-config-repo/bank-api-gateway.yml.
+
+spring:
+  application:
+    name: bank-api-gateway
+  config:
+    import: configserver:${CONFIG_SERVER_URL:http://localhost:8888}
+  cloud:
+    config:
+      fail-fast: true

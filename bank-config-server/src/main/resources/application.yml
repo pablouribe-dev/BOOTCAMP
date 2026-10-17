@@ -1,0 +1,22 @@
+# Unica configuracion local del sistema: el Config Server necesita saber
+# donde esta el repositorio de configuracion antes de poder servirlo.
+
+server:
+  port: 8888
+
+spring:
+  application:
+    name: bank-config-server
+  profiles:
+    # Perfil "native": lee los .yml del sistema de archivos en lugar de Git.
+    active: native
+  cloud:
+    config:
+      server:
+        native:
+          search-locations: file:${CONFIG_REPO_PATH:../bank-config-repo}
+
+logging:
+  level:
+    root: INFO
+    com.bank: DEBUG

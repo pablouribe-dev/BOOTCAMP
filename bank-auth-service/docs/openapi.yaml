@@ -1,0 +1,373 @@
+openapi: 3.0.3
+info:
+  title: bank-auth-service
+  description: |
+    Parte III. Usuarios del sistema y emision de JWT (HS256). El API Gateway valida
+    los tokens con el mismo secreto (JWT_SECRET). /auth/login y /auth/register son
+    publicos; /auth/users/** exige rol ADMIN. No llama a otros microservicios.
+
+    Claims del token: sub (userId), username, roles, customerId, phoneNumber, iat, exp.
+  version: 3.0.0
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8086
+    description: Directo al servicio (desarrollo)
+tags:
+  - name: Auth
+    description: Registro e inicio de sesion (publicos)
+  - name: Users
+    description: Administracion de usuarios (rol ADMIN)
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Registrar un usuario con rol USER
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              username: ana
+              password: Secret123
+              customerId: 68f0a1b2c3d4e5f6a7b8c9d0
+              phoneNumber: "987654321"
+      responses:
+        '201':
+          description: Usuario creado (sin el hash de la contrasena)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesion y obtener el token
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              username: admin
+              password: Admin123!
+      responses:
+        '200':
+          description: Token de acceso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+              example:
+                accessToken: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI2OGYw...
+                tokenType: Bearer
+                expiresIn: 3600
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Credenciales invalidas (mensaje generico, no revela que fallo)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 401
+                error: Unauthorized
+                message: Invalid username or password
+                path: /auth/login
+
+  /auth/users:
+    post:
+      tags: [Users]
+      summary: Crear un usuario con roles (ADMIN)
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+            example:
+              username: operador
+              password: Secret123
+              roles: [ADMIN]
+      responses:
+        '201':
+          description: Usuario creado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [Users]
+      summary: Listar usuarios (ADMIN)
+      operationId: findAllUsers
+      responses:
+        '200':
+          description: Usuarios
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /auth/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Users]
+      summary: Buscar un usuario (ADMIN)
+      operationId: findUser
+      responses:
+        '200':
+          description: Usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Users]
+      summary: Actualizar roles, contacto, estado y (opcional) contrasena (ADMIN)
+      operationId: updateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateRequest'
+      responses:
+        '200':
+          description: Usuario actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Users]
+      summary: Eliminar un usuario (ADMIN)
+      operationId: deleteUser
+      responses:
+        '204':
+          description: Eliminado
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Role:
+      type: string
+      enum: [ADMIN, USER]
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+        password:
+          type: string
+          minLength: 8
+        customerId:
+          type: string
+          description: Opcional e informativo (no se valida, este servicio no usa REST)
+        phoneNumber:
+          type: string
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+    TokenResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: integer
+          description: Segundos de validez (60 minutos por defecto)
+    UserCreateRequest:
+      type: object
+      required: [username, password, roles]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        roles:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Role'
+        customerId:
+          type: string
+        phoneNumber:
+          type: string
+        enabled:
+          type: boolean
+    UserUpdateRequest:
+      type: object
+      required: [roles]
+      properties:
+        password:
+          type: string
+          minLength: 8
+          description: Solo si se quiere cambiar
+        roles:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Role'
+        customerId:
+          type: string
+        phoneNumber:
+          type: string
+        enabled:
+          type: boolean
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+        customerId:
+          type: string
+        phoneNumber:
+          type: string
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+  responses:
+    BadRequest:
+      description: Validacion fallida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 400
+            error: Bad Request
+            message: 'password: password must have at least 8 characters'
+            path: /auth/register
+    Unauthorized:
+      description: Sin token o token invalido o vencido (gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Rol insuficiente (gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 403
+            error: Forbidden
+            message: Insufficient role for this operation
+            path: /auth/users
+    NotFound:
+      description: Usuario inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Nombre de usuario repetido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 409
+            error: Conflict
+            message: Username ana is already taken
+            path: /auth/register

@@ -1,0 +1,33 @@
+# Configuracion del microservicio de creditos (productos activos).
+
+server:
+  port: 8083
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/bank_credits}
+      auto-index-creation: true
+  # Parte III: tipo por defecto del sobre (sin type headers).
+  kafka:
+    consumer:
+      properties:
+        spring.json.value.default.type: com.bank.credit.event.EventEnvelope
+        spring.json.trusted.packages: com.bank.credit.event
+
+bank:
+  services:
+    customer-service-url: ${CUSTOMER_SERVICE_URL:http://bank-customer-service}
+  rules:
+    # Cantidad maxima de creditos que puede tener un cliente personal.
+    max-personal-credits: 1
+  # Parte III: deteccion diaria de deudas vencidas (01:00 todos los dias).
+  debts:
+    overdue-scan-cron: ${OVERDUE_SCAN_CRON:0 0 1 * * *}
+  # Publica deudas vencidas de creditos y consume las de todos los productos
+  # (regla de adquisicion con copia local).
+  kafka:
+    published:
+      - debt-events
+    consumed:
+      - debt-events

@@ -1,0 +1,13 @@
+# Unica configuracion local: el nombre de la aplicacion y donde esta el
+# Config Server. Todo lo demas (puerto, URI de Mongo, URLs de account-service,
+# credit-service y credit-card-service) llega desde
+# bank-config-repo/bank-transaction-service.yml.
+
+spring:
+  application:
+    name: bank-transaction-service
+  config:
+    import: configserver:${CONFIG_SERVER_URL:http://localhost:8888}
+  cloud:
+    config:
+      fail-fast: true

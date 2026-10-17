@@ -1,0 +1,803 @@
+openapi: 3.0.3
+info:
+  title: bank-transaction-service
+  description: |
+    Parte III: todas las rutas pasan por el API Gateway con JWT (Bearer). Sin token o con
+    token invalido o vencido responde 401; con rol insuficiente (USER en PUT o DELETE, o
+    rutas de ADMIN) responde 403.
+
+    Microservicio de movimientos: depositos, retiros, pagos, consumos,
+    transferencias y reportes. Es el dueno de los movimientos y de sus reglas.
+    Para cada operacion valida las restricciones del producto, pide el cambio de
+    saldo al servicio dueno (por nombre de Eureka, con circuit breaker y timeout
+    de 2 s) y solo si ese cambio fue exitoso registra el movimiento.
+
+    Parte II: comision por exceso de transacciones (feeCharged), transferencias
+    con compensacion y reportes.
+  version: 3.0.0
+security:
+  - bearerAuth: []
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8085
+    description: Directo al servicio (desarrollo)
+tags:
+  - name: Operations
+    description: Operaciones que mueven saldo
+  - name: Transactions
+    description: Consulta y administracion de movimientos
+  - name: Reports
+    description: Reportes de movimientos
+
+paths:
+  /transactions/deposit:
+    post:
+      tags: [Operations]
+      summary: Deposito en cuenta
+      description: |
+        Reglas duras del tipo de cuenta (Parte I):
+        - SAVINGS: movimientos del mes en curso < monthlyMovementLimit.
+        - FIXED_TERM: hoy es movementDay y no hay otro movimiento este mes.
+        - CURRENT: sin restriccion.
+
+        Comision por exceso (Parte II): si los depositos y retiros del mes ya
+        alcanzan freeTransactionLimit, se cobra transactionFee. Se descuenta de
+        la misma cuenta y queda en feeCharged; no se crea un movimiento aparte.
+      operationId: deposit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountTransactionRequest'
+            example:
+              accountId: 68f0c3d4e5f6a7b8c9d0e1f2
+              amount: 150.00
+              description: Deposito en ventanilla
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          $ref: '#/components/responses/TransactionCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions/withdrawal:
+    post:
+      tags: [Operations]
+      summary: Retiro de cuenta
+      description: |
+        Mismas reglas y comision que el deposito. bank-account-service rechaza
+        el retiro (409) si el saldo no alcanza para el importe mas la comision.
+      operationId: withdrawal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountTransactionRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          $ref: '#/components/responses/TransactionCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions/payment:
+    post:
+      tags: [Operations]
+      summary: Pago de credito o de tarjeta de credito
+      description: |
+        productType admite CREDIT y CREDIT_CARD (ACCOUNT y DEBIT_CARD devuelven 409).
+        Parte III - pago de terceros: con payerCustomerId distinto del titular se valida que el
+        pagador exista (REST a bank-customer-service con circuit breaker; 404 si no) y el
+        movimiento queda con thirdParty = true. Si el pago salda una cuota vencida, el producto
+        publica DEBT_OVERDUE_CLEARED.
+      operationId: payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+            example:
+              productType: CREDIT_CARD
+              productId: 68f0d4e5f6a7b8c9d0e1f2a3
+              amount: 200.00
+              description: Pago de tarjeta
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          $ref: '#/components/responses/TransactionCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions/charge:
+    post:
+      tags: [Operations]
+      summary: Consumo con tarjeta de credito
+      operationId: charge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChargeRequest'
+            example:
+              creditCardId: 68f0d4e5f6a7b8c9d0e1f2a3
+              amount: 80.00
+              description: Compra en supermercado
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          $ref: '#/components/responses/TransactionCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions/transfer:
+    post:
+      tags: [Operations]
+      summary: Transferencia entre cuentas del banco
+      description: |
+        1. Origen y destino deben existir y ser distintos (destino por numero).
+        2. transferType: OWN si son del mismo cliente, THIRD_PARTY si no.
+        3. Se aplican las reglas duras de ahorro y plazo fijo a ambas cuentas.
+        4. Retiro del origen sin comision; si no hay fondos, 409.
+        5. Deposito en el destino. Si falla, se compensa devolviendo el dinero
+           al origen, se responde con el error y no se guarda ningun movimiento.
+           Si la compensacion tambien falla, queda un log ERROR con los ids.
+        6. Si todo sale bien, se guardan TRANSFER_OUT y TRANSFER_IN con el mismo
+           transferId.
+
+        Las transferencias no cobran comision ni cuentan para el maximo gratuito.
+      operationId: transfer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+            example:
+              sourceAccountId: 68f0c3d4e5f6a7b8c9d0e1f2
+              destinationAccountNumber: '49410162809136'
+              amount: 87.00
+              description: Pago a proveedor
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          description: Transferencia registrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions:
+    get:
+      tags: [Transactions]
+      summary: Listar movimientos
+      operationId: findAllTransactions
+      parameters:
+        - name: productId
+          in: query
+          required: false
+          description: Filtra los movimientos de un producto
+          schema:
+            type: string
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Lista de movimientos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TransactionResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /transactions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Identificador del movimiento
+        schema:
+          type: string
+    get:
+      tags: [Transactions]
+      summary: Buscar un movimiento por id
+      operationId: findTransactionById
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Movimiento encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Transactions]
+      summary: Corregir un movimiento (administrativo)
+      description: No recalcula saldos. Solo corrige amount y description del registro.
+      operationId: updateTransaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionUpdateRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Movimiento actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Transactions]
+      summary: Eliminar un movimiento (administrativo)
+      description: No recalcula saldos.
+      operationId: deleteTransaction
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '204':
+          description: Movimiento eliminado
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /reports/products/{productType}/{productId}:
+    get:
+      tags: [Reports]
+      summary: Reporte completo de un producto en un intervalo
+      description: |
+        Datos del producto (de su servicio dueno), saldo actual, movimientos del
+        intervalo y totales por tipo de movimiento y comisiones. El saldo actual
+        es el disponible de la cuenta, el pendiente del credito o el disponible
+        de la tarjeta.
+      operationId: productReport
+      parameters:
+        - name: productType
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProductType'
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Reporte del producto
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductReportResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /reports/products:
+    get:
+      tags: [Reports]
+      summary: Reporte general por tipo de producto
+      description: |
+        Por cada productType: cantidad de productos con movimientos, cantidad de
+        movimientos, importe total, comisiones y totales por tipo de movimiento.
+      operationId: generalReport
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Reporte general
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeneralReportResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /reports/last-movements:
+    get:
+      tags: [Reports]
+      summary: Ultimos 10 movimientos de un producto
+      description: |
+        Del mas reciente al mas antiguo. Admite CREDIT_CARD y, desde la Parte III,
+        DEBIT_CARD (configurable en bank.reports.last-movements-product-types). Los
+        movimientos de la tarjeta de debito llegan por eventos (DEBIT_PAYMENT) y no se
+        consulta por REST al servicio de tarjetas de debito. Otro tipo devuelve 400.
+      operationId: lastMovements
+      parameters:
+        - name: productType
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProductType'
+        - name: productId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Hasta 10 movimientos
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 10
+                items:
+                  $ref: '#/components/schemas/TransactionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token de POST /auth/login (bank-auth-service), validado por el gateway.
+  parameters:
+    From:
+      name: from
+      in: query
+      required: true
+      description: Inicio del intervalo (YYYY-MM-DD), inclusive
+      schema:
+        type: string
+        format: date
+    To:
+      name: to
+      in: query
+      required: true
+      description: Fin del intervalo (YYYY-MM-DD), inclusive. No puede ser anterior a from.
+      schema:
+        type: string
+        format: date
+
+  schemas:
+    ProductType:
+      type: string
+      enum: [ACCOUNT, CREDIT, CREDIT_CARD, DEBIT_CARD]
+      description: DEBIT_CARD (Parte III) solo aparece en movimientos originados por eventos
+    TransactionType:
+      type: string
+      enum: [DEPOSIT, WITHDRAWAL, PAYMENT, CHARGE, TRANSFER_OUT, TRANSFER_IN, DEBIT_PAYMENT]
+    TransactionOrigin:
+      type: string
+      enum: [API, DEBIT_CARD, YANKI]
+      description: Parte III - API por defecto; DEBIT_CARD y YANKI llegan por Kafka y no cuentan para maximos ni comisiones
+    TransferType:
+      type: string
+      enum: [OWN, THIRD_PARTY]
+
+    AccountTransactionRequest:
+      type: object
+      required: [accountId, amount]
+      properties:
+        accountId:
+          type: string
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        description:
+          type: string
+
+    PaymentRequest:
+      type: object
+      required: [productType, productId, amount]
+      properties:
+        productType:
+          $ref: '#/components/schemas/ProductType'
+        productId:
+          type: string
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        description:
+          type: string
+        payerCustomerId:
+          type: string
+          description: Parte III, opcional - cliente que paga; si falta, paga el titular
+
+    ChargeRequest:
+      type: object
+      required: [creditCardId, amount]
+      properties:
+        creditCardId:
+          type: string
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        description:
+          type: string
+
+    TransferRequest:
+      type: object
+      required: [sourceAccountId, destinationAccountNumber, amount]
+      properties:
+        sourceAccountId:
+          type: string
+        destinationAccountNumber:
+          type: string
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        description:
+          type: string
+
+    TransactionUpdateRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        description:
+          type: string
+
+    TransactionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        productType:
+          $ref: '#/components/schemas/ProductType'
+        productId:
+          type: string
+        customerId:
+          type: string
+        transactionType:
+          $ref: '#/components/schemas/TransactionType'
+        amount:
+          type: number
+        description:
+          type: string
+        feeCharged:
+          type: number
+          description: Comision por exceso cobrada; 0 si no hubo
+        transferId:
+          type: string
+          nullable: true
+        transferType:
+          $ref: '#/components/schemas/TransferType'
+        payerCustomerId:
+          type: string
+          description: Parte III - cliente que pago (pagos)
+        thirdParty:
+          type: boolean
+          description: Parte III - true si el pagador no es el titular
+        origin:
+          $ref: '#/components/schemas/TransactionOrigin'
+        accountId:
+          type: string
+          description: Parte III - cuenta afectada (pagos con tarjeta de debito y Yanki)
+        reference:
+          type: string
+          description: Parte III - id de la tarjeta de debito o del pago Yanki
+        createdAt:
+          type: string
+          format: date-time
+
+    TransferResponse:
+      type: object
+      properties:
+        transferId:
+          type: string
+        transferType:
+          $ref: '#/components/schemas/TransferType'
+        amount:
+          type: number
+        outgoing:
+          $ref: '#/components/schemas/TransactionResponse'
+        incoming:
+          $ref: '#/components/schemas/TransactionResponse'
+
+    TotalsByType:
+      type: object
+      description: Importe total por tipo de movimiento
+      additionalProperties:
+        type: number
+      example:
+        DEPOSIT: 110
+        WITHDRAWAL: 20
+        TRANSFER_OUT: 87
+
+    ProductReportResponse:
+      type: object
+      properties:
+        productType:
+          $ref: '#/components/schemas/ProductType'
+        productId:
+          type: string
+        customerId:
+          type: string
+        product:
+          type: object
+          description: Datos del producto tal como los devuelve su servicio dueno
+        currentBalance:
+          type: number
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        movementCount:
+          type: integer
+        totalsByType:
+          $ref: '#/components/schemas/TotalsByType'
+        totalFees:
+          type: number
+        movements:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionResponse'
+
+    ProductTypeSummary:
+      type: object
+      properties:
+        productType:
+          $ref: '#/components/schemas/ProductType'
+        productsWithMovements:
+          type: integer
+        movementCount:
+          type: integer
+        totalAmount:
+          type: number
+        totalFees:
+          type: number
+        totalsByType:
+          $ref: '#/components/schemas/TotalsByType'
+
+    GeneralReportResponse:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        totalMovements:
+          type: integer
+        byProductType:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductTypeSummary'
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Sin token, o token invalido o vencido (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 401
+            error: Unauthorized
+            message: Missing, invalid or expired token
+            path: /customers
+    Forbidden:
+      description: Rol insuficiente o endpoint interno (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 403
+            error: Forbidden
+            message: Insufficient role for this operation
+            path: /customers/68f0a1b2c3d4e5f6a7b8c9d0
+    TransactionCreated:
+      description: Movimiento registrado (el saldo ya fue actualizado)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TransactionResponse'
+    BadRequest:
+      description: Validacion de entrada fallida o parametro de consulta invalido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalidRange:
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 400
+                error: Bad Request
+                message: "'from' must not be after 'to'"
+                path: /reports/products
+            unsupportedType:
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 400
+                error: Bad Request
+                message: The last movements report is only available for [CREDIT_CARD]
+                path: /reports/last-movements
+    NotFound:
+      description: Movimiento o producto inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Regla de negocio violada (propia o reportada por el servicio dueno)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            monthlyLimit:
+              summary: Limite mensual de la cuenta de ahorro
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: The account reached its monthly movement limit of 20
+                path: /transactions/deposit
+            insufficientFunds:
+              summary: Fondos insuficientes (propagado desde account-service)
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Insufficient funds in account 12345678901234
+                path: /transactions/transfer
+            sameAccount:
+              summary: Transferencia a la misma cuenta
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Source and destination accounts must be different
+                path: /transactions/transfer
+    ServiceUnavailable:
+      description: |
+        Un servicio de producto no esta disponible: conexion rechazada, timeout
+        de 2 s o circuit breaker abierto. En una transferencia, si el deposito en
+        el destino falla, el dinero se devuelve al origen antes de responder.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-16T10:15:30.123'
+            status: 503
+            error: Service Unavailable
+            message: bank-credit-card-service is not available (circuit breaker open)
+            path: /transactions/charge
+    InternalError:
+      description: Error inesperado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

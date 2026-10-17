@@ -1,0 +1,11 @@
+# Unica configuracion local: el nombre y donde esta el Config Server.
+# Puerto y flags de registro llegan desde bank-config-repo/bank-eureka-server.yml.
+
+spring:
+  application:
+    name: bank-eureka-server
+  config:
+    import: configserver:${CONFIG_SERVER_URL:http://localhost:8888}
+  cloud:
+    config:
+      fail-fast: true

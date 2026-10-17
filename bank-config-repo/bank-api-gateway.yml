@@ -1,0 +1,91 @@
+# Configuracion del API Gateway: punto de entrada unico en el puerto 8080.
+
+server:
+  port: 8080
+
+spring:
+  cloud:
+    gateway:
+      # Rutas explicitas: no se exponen automaticamente todos los servicios.
+      discovery:
+        locator:
+          enabled: false
+      routes:
+        - id: customer-service
+          uri: lb://bank-customer-service
+          predicates:
+            - Path=/customers/**
+        - id: account-service
+          uri: lb://bank-account-service
+          predicates:
+            - Path=/accounts/**
+        - id: credit-service
+          uri: lb://bank-credit-service
+          predicates:
+            - Path=/credits/**
+        - id: credit-card-service
+          uri: lb://bank-credit-card-service
+          predicates:
+            - Path=/credit-cards/**
+        - id: transaction-service
+          uri: lb://bank-transaction-service
+          predicates:
+            - Path=/transactions/**,/reports/**
+        # --- Parte III: servicios nuevos ------------------------------------
+        - id: auth-service
+          uri: lb://bank-auth-service
+          predicates:
+            - Path=/auth/**
+        - id: debit-card-service
+          uri: lb://bank-debit-card-service
+          predicates:
+            - Path=/debit-cards/**
+        - id: yanki-service
+          uri: lb://bank-yanki-service
+          predicates:
+            - Path=/yanki/**
+        # --- Parte III: endpoints /admin de cada servicio (rol ADMIN) -------
+        # Varios servicios exponen /admin/...; afuera se distinguen por un
+        # prefijo y el gateway lo quita: /admin/customers/x -> /admin/x.
+        - id: customer-admin
+          uri: lb://bank-customer-service
+          predicates:
+            - Path=/admin/customers/**
+          filters:
+            - RewritePath=/admin/customers/(?<segment>.*), /admin/$\{segment}
+        - id: account-admin
+          uri: lb://bank-account-service
+          predicates:
+            - Path=/admin/accounts/**
+          filters:
+            - RewritePath=/admin/accounts/(?<segment>.*), /admin/$\{segment}
+        - id: credit-admin
+          uri: lb://bank-credit-service
+          predicates:
+            - Path=/admin/credits/**
+          filters:
+            - RewritePath=/admin/credits/(?<segment>.*), /admin/$\{segment}
+        - id: credit-card-admin
+          uri: lb://bank-credit-card-service
+          predicates:
+            - Path=/admin/credit-cards/**
+          filters:
+            - RewritePath=/admin/credit-cards/(?<segment>.*), /admin/$\{segment}
+
+bank:
+  gateway:
+    # Endpoints internos que nunca se exponen hacia afuera (responden 403).
+    blocked-paths:
+      - /**/balance-operations
+      - /**/balance-operations/**
+  security:
+    jwt:
+      # Mismo secreto que bank-auth-service. Solo por variable de entorno: sin
+      # valor por defecto, el gateway no arranca si falta.
+      secret: ${JWT_SECRET:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway

@@ -1,0 +1,59 @@
+# Configuracion del microservicio de cuentas bancarias (productos pasivos).
+
+server:
+  port: 8082
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/bank_accounts}
+      auto-index-creation: true
+  # Parte III: tipo por defecto del sobre (sin type headers).
+  kafka:
+    consumer:
+      properties:
+        spring.json.value.default.type: com.bank.account.event.EventEnvelope
+        spring.json.trusted.packages: com.bank.account.event
+
+bank:
+  # URLs base: nombres de Eureka, resueltos por el WebClient balanceado.
+  services:
+    customer-service-url: ${CUSTOMER_SERVICE_URL:http://bank-customer-service}
+    credit-card-service-url: ${CREDIT_CARD_SERVICE_URL:http://bank-credit-card-service}
+
+  # Limites de negocio parametrizables: ninguno vive en el codigo.
+  accounts:
+    defaults:
+      savings:
+        minimum-opening-amount: 0
+        free-transaction-limit: 5
+        transaction-fee: 1.50
+        # Limite duro de movimientos al mes (regla de la Parte I).
+        monthly-movement-limit: 20
+      current:
+        minimum-opening-amount: 0
+        free-transaction-limit: 10
+        transaction-fee: 1.50
+        maintenance-fee: 10.00
+      fixed-term:
+        minimum-opening-amount: 0
+        free-transaction-limit: 1
+        transaction-fee: 1.50
+        # Un unico movimiento al mes, en el dia movementDay.
+        monthly-movement-limit: 1
+    vip:
+      minimum-opening-amount: 500
+      minimum-daily-average: 1000
+    pyme:
+      minimum-opening-amount: 0
+
+
+  # Parte III: publica snapshots de cuentas y resultados de operaciones;
+  # consume deudas vencidas y peticiones de operacion.
+  kafka:
+    published:
+      - account-events
+      - operation-results
+    consumed:
+      - debt-events
+      - operation-requests

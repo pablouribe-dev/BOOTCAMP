@@ -1,0 +1,32 @@
+# Configuracion del microservicio de tarjetas de debito (Parte III).
+# No llama a otros servicios por REST: se comunica solo por Kafka.
+
+server:
+  port: 8087
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/bank_debit_cards}
+      auto-index-creation: true
+  kafka:
+    consumer:
+      properties:
+        spring.json.value.default.type: com.bank.debitcard.event.EventEnvelope
+        spring.json.trusted.packages: com.bank.debitcard.event
+
+bank:
+  debit-cards:
+    # Prefijo del numero de tarjeta generado (16 digitos).
+    card-number-prefix: "5555"
+  # Publica snapshots de tarjetas y peticiones de retiro; consume clientes,
+  # cuentas, deudas vencidas y resultados de operaciones (copias locales).
+  kafka:
+    published:
+      - debit-card-events
+      - operation-requests
+    consumed:
+      - customer-events
+      - account-events
+      - debt-events
+      - operation-results

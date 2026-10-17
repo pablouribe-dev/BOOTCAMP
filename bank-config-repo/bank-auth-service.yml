@@ -1,0 +1,23 @@
+# Configuracion del microservicio de autenticacion (Parte III).
+# No usa Kafka ni llama a otros servicios: solo MongoDB y Eureka.
+
+server:
+  port: 8086
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/bank_auth}
+      auto-index-creation: true
+
+bank:
+  security:
+    jwt:
+      # Secreto HS256 (minimo 32 bytes). Solo por variable de entorno: sin
+      # valor por defecto, el servicio no arranca si falta.
+      secret: ${JWT_SECRET:}
+      expiration: ${JWT_EXPIRATION:60m}
+    # Administrador inicial: se crea al arrancar si no existe ningun ADMIN.
+    admin:
+      username: ${ADMIN_USERNAME:}
+      password: ${ADMIN_PASSWORD:}

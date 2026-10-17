@@ -1,0 +1,17 @@
+# Configuracion del registro de servicios Eureka.
+
+server:
+  port: 8761
+
+eureka:
+  instance:
+    hostname: ${EUREKA_HOSTNAME:localhost}
+  client:
+    # El servidor no se registra a si mismo ni descarga el registro.
+    register-with-eureka: false
+    fetch-registry: false
+  server:
+    # En desarrollo los servicios se reinician seguido: sin self-preservation
+    # Eureka limpia rapido las instancias caidas.
+    enable-self-preservation: false
+    eviction-interval-timer-in-ms: 5000

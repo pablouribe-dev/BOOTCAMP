@@ -1,0 +1,37 @@
+# Configuracion del microservicio de movimientos.
+
+server:
+  port: 8085
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/bank_transactions}
+      auto-index-creation: true
+  # Parte III: tipo por defecto del sobre (sin type headers).
+  kafka:
+    consumer:
+      properties:
+        spring.json.value.default.type: com.bank.transaction.event.EventEnvelope
+        spring.json.trusted.packages: com.bank.transaction.event
+
+bank:
+  # URLs base: nombres de Eureka, resueltos por el WebClient balanceado.
+  services:
+    account-service-url: ${ACCOUNT_SERVICE_URL:http://bank-account-service}
+    credit-service-url: ${CREDIT_SERVICE_URL:http://bank-credit-service}
+    credit-card-service-url: ${CREDIT_CARD_SERVICE_URL:http://bank-credit-card-service}
+    # Parte III: valida al pagador de un pago de terceros.
+    customer-service-url: ${CUSTOMER_SERVICE_URL:http://bank-customer-service}
+
+  reports:
+    # Tipos de producto con reporte de ultimos 10 movimientos.
+    last-movements-product-types:
+      - CREDIT_CARD
+      - DEBIT_CARD
+
+  # Parte III: registra movimientos a partir de los resultados de operaciones
+  # de cuenta (tarjeta de debito y Yanki). No publica eventos.
+  kafka:
+    consumed:
+      - operation-results

@@ -1,0 +1,28 @@
+# Configuracion del microservicio de clientes.
+
+server:
+  port: 8081
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/bank_customers}
+      auto-index-creation: true
+    # Parte III: cache Redis de clientes (datos maestros).
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # Si Redis no responde, se corta rapido y se sigue contra MongoDB.
+      timeout: 500ms
+      connect-timeout: 500ms
+      repositories:
+        enabled: false
+
+bank:
+  cache:
+    ttl: 10m
+    timeout: 500ms
+  # Parte III: publica snapshots de clientes; no consume ningun topic.
+  kafka:
+    published:
+      - customer-events

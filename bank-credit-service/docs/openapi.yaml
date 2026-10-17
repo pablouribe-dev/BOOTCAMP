@@ -1,0 +1,459 @@
+openapi: 3.0.3
+info:
+  title: bank-credit-service
+  description: |
+    Parte III: todas las rutas pasan por el API Gateway con JWT (Bearer). Sin token o con
+    token invalido o vencido responde 401; con rol insuficiente (USER en PUT o DELETE, o
+    rutas de ADMIN) responde 403.
+
+    Microservicio de creditos personales y empresariales (productos activos).
+    Valida las reglas de otorgamiento segun el tipo de cliente, que consulta a
+    bank-customer-service. No exige que el cliente tenga cuenta bancaria.
+  version: 3.0.0
+security:
+  - bearerAuth: []
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8083
+    description: Directo al servicio (desarrollo)
+tags:
+  - name: Credits
+    description: CRUD de creditos y consulta de saldo pendiente
+  - name: Internal
+    description: Endpoints internos invocados por bank-transaction-service
+  - name: Admin
+    description: Parte III - administracion (rol ADMIN)
+
+paths:
+  /credits:
+    post:
+      tags: [Credits]
+      summary: Otorgar un credito
+      description: |
+        - Cliente PERSONAL: un solo credito (configurable), de tipo PERSONAL.
+        - Cliente BUSINESS: varios creditos, de tipo BUSINESS.
+      operationId: createCredit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreditRequest'
+            example:
+              creditType: PERSONAL
+              customerId: 68f0a1b2c3d4e5f6a7b8c9d0
+              grantedAmount: 5000.00
+              interestRate: 12.5
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          description: Credito creado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [Credits]
+      summary: Listar creditos
+      operationId: findAllCredits
+      parameters:
+        - name: customerId
+          in: query
+          required: false
+          description: Filtra los creditos de un cliente
+          schema:
+            type: string
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Lista de creditos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CreditResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credits/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [Credits]
+      summary: Buscar un credito por id
+      operationId: findCreditById
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Credito encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Credits]
+      summary: Actualizar un credito
+      description: |
+        creditType y customerId son inmutables. grantedAmount solo puede
+        corregirse mientras el credito no haya recibido pagos; en ese caso
+        outstandingBalance se reinicia al nuevo importe.
+      operationId: updateCredit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreditRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Credito actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Credits]
+      summary: Eliminar un credito
+      operationId: deleteCredit
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '204':
+          description: Credito eliminado
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credits/{id}/balance:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [Credits]
+      summary: Consultar saldo pendiente
+      operationId: getCreditBalance
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Saldo pendiente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditBalanceResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credits/{id}/balance-operations:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    post:
+      tags: [Internal]
+      summary: Aplicar un pago (interno)
+      description: |
+        Lo invoca bank-transaction-service. Bloqueado por el API Gateway (403). Rechaza con 409 un pago que supere
+        outstandingBalance.
+      operationId: applyCreditBalanceOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreditOperationRequest'
+            example:
+              operation: PAYMENT
+              amount: 50.00
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Saldo pendiente resultante
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditBalanceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/overdue-debts/scan:
+    post:
+      tags: [Admin]
+      summary: Ejecutar ya la deteccion diaria de deudas vencidas (ADMIN)
+      description: |
+        Parte III. Busca los productos con dueAmount mayor a 0 y vencimiento anterior a hoy aun no
+        notificados, publica DEBT_OVERDUE_DETECTED en bank.debt.events y los marca. Es lo mismo que
+        hace el proceso diario (cron bank.debts.overdue-scan-cron). En el gateway:
+        POST /admin/credits/overdue-debts/scan.
+      operationId: scanOverdueDebts
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Deudas notificadas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverdueScanResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token de POST /auth/login (bank-auth-service), validado por el gateway.
+  parameters:
+    CreditId:
+      name: id
+      in: path
+      required: true
+      description: Identificador del credito
+      schema:
+        type: string
+
+  schemas:
+    CreditType:
+      type: string
+      enum: [PERSONAL, BUSINESS]
+    CreditOperationType:
+      type: string
+      enum: [PAYMENT]
+
+    CreditRequest:
+      type: object
+      required: [creditType, customerId, grantedAmount, interestRate]
+      properties:
+        creditType:
+          $ref: '#/components/schemas/CreditType'
+        customerId:
+          type: string
+        grantedAmount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        interestRate:
+          type: number
+          minimum: 0
+          description: Tasa de interes en porcentaje
+        dueDate:
+          type: string
+          format: date
+          description: Parte III, opcional - vencimiento de la cuota (se fija con el PUT)
+          example: '2026-10-16'
+        dueAmount:
+          type: number
+          minimum: 0
+          description: Parte III, opcional - importe exigible al vencimiento
+          example: 150
+
+    OverdueScanResponse:
+      type: object
+      properties:
+        productType:
+          type: string
+          example: CREDIT
+        detected:
+          type: integer
+          format: int64
+          description: Deudas vencidas nuevas notificadas (DEBT_OVERDUE_DETECTED)
+          example: 1
+
+    CreditResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        creditType:
+          $ref: '#/components/schemas/CreditType'
+        customerId:
+          type: string
+        grantedAmount:
+          type: number
+        outstandingBalance:
+          type: number
+        interestRate:
+          type: number
+        dueDate:
+          type: string
+          format: date
+        dueAmount:
+          type: number
+          description: Un pago lo reduce sin bajar de 0
+        overdueNotified:
+          type: boolean
+          description: true si ya se publico DEBT_OVERDUE_DETECTED (vencida y sin saldar)
+        createdAt:
+          type: string
+          format: date-time
+
+    CreditBalanceResponse:
+      type: object
+      properties:
+        creditId:
+          type: string
+        creditType:
+          $ref: '#/components/schemas/CreditType'
+        grantedAmount:
+          type: number
+        outstandingBalance:
+          type: number
+
+    CreditOperationRequest:
+      type: object
+      required: [operation, amount]
+      properties:
+        operation:
+          $ref: '#/components/schemas/CreditOperationType'
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Sin token, o token invalido o vencido (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 401
+            error: Unauthorized
+            message: Missing, invalid or expired token
+            path: /customers
+    Forbidden:
+      description: Rol insuficiente o endpoint interno (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 403
+            error: Forbidden
+            message: Insufficient role for this operation
+            path: /customers/68f0a1b2c3d4e5f6a7b8c9d0
+    BadRequest:
+      description: Validacion de entrada fallida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Credito o cliente inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Regla de negocio violada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            overdueDebt:
+              summary: Parte III - cliente con deuda vencida
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Customer 68f0a1b2c3d4e5f6a7b8c9d0 has an overdue debt and cannot acquire new products
+                path: /credits
+            secondPersonalCredit:
+              summary: Segundo credito de un cliente personal
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: A personal customer can only hold 1 credit(s)
+                path: /credits
+            paymentTooHigh:
+              summary: Pago mayor al saldo pendiente
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: The payment exceeds the outstanding balance of credit 68f0e5f6a7b8c9d0e1f2a3b4
+                path: /credits/68f0e5f6a7b8c9d0e1f2a3b4/balance-operations
+    ServiceUnavailable:
+      description: bank-customer-service no disponible (conexion rechazada, timeout de 2 s o circuit breaker abierto)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Error inesperado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

@@ -1,0 +1,457 @@
+openapi: 3.0.3
+info:
+  title: bank-credit-card-service
+  description: |
+    Parte III: todas las rutas pasan por el API Gateway con JWT (Bearer). Sin token o con
+    token invalido o vencido responde 401; con rol insuficiente (USER en PUT o DELETE, o
+    rutas de ADMIN) responde 403.
+
+    Microservicio de tarjetas de credito. El tipo de tarjeta debe coincidir con
+    el tipo de cliente, que consulta a bank-customer-service. No exige que el
+    cliente tenga cuenta bancaria.
+  version: 3.0.0
+security:
+  - bearerAuth: []
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8084
+    description: Directo al servicio (desarrollo)
+tags:
+  - name: CreditCards
+    description: CRUD de tarjetas y consulta de saldo disponible
+  - name: Internal
+    description: Endpoints internos invocados por bank-transaction-service
+  - name: Admin
+    description: Parte III - administracion (rol ADMIN)
+
+paths:
+  /credit-cards:
+    post:
+      tags: [CreditCards]
+      summary: Emitir una tarjeta de credito
+      operationId: createCreditCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreditCardRequest'
+            example:
+              cardType: PERSONAL
+              customerId: 68f0a1b2c3d4e5f6a7b8c9d0
+              creditLimit: 3000.00
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          description: Tarjeta emitida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditCardResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [CreditCards]
+      summary: Listar tarjetas
+      operationId: findAllCreditCards
+      parameters:
+        - name: customerId
+          in: query
+          required: false
+          description: Filtra las tarjetas de un cliente
+          schema:
+            type: string
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Lista de tarjetas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CreditCardResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credit-cards/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CreditCardId'
+    get:
+      tags: [CreditCards]
+      summary: Buscar una tarjeta por id
+      operationId: findCreditCardById
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Tarjeta encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditCardResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [CreditCards]
+      summary: Actualizar una tarjeta
+      description: |
+        cardType y customerId son inmutables. creditLimit no puede quedar por
+        debajo de usedAmount.
+      operationId: updateCreditCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreditCardRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Tarjeta actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditCardResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [CreditCards]
+      summary: Eliminar una tarjeta
+      operationId: deleteCreditCard
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '204':
+          description: Tarjeta eliminada
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credit-cards/{id}/balance:
+    parameters:
+      - $ref: '#/components/parameters/CreditCardId'
+    get:
+      tags: [CreditCards]
+      summary: Consultar saldo disponible
+      operationId: getCreditCardBalance
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Linea, consumo y saldo disponible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardBalanceResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credit-cards/{id}/balance-operations:
+    parameters:
+      - $ref: '#/components/parameters/CreditCardId'
+    post:
+      tags: [Internal]
+      summary: Aplicar consumo o pago (interno)
+      description: |
+        Lo invoca bank-transaction-service. Bloqueado por el API Gateway (403).
+        - CHARGE: se acepta solo si amount <= availableBalance.
+        - PAYMENT: reduce usedAmount y no puede dejarlo negativo.
+      operationId: applyCreditCardBalanceOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardOperationRequest'
+            example:
+              operation: CHARGE
+              amount: 20.00
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Saldo disponible resultante
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardBalanceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/overdue-debts/scan:
+    post:
+      tags: [Admin]
+      summary: Ejecutar ya la deteccion diaria de deudas vencidas (ADMIN)
+      description: |
+        Parte III. Busca los productos con dueAmount mayor a 0 y vencimiento anterior a hoy aun no
+        notificados, publica DEBT_OVERDUE_DETECTED en bank.debt.events y los marca. Es lo mismo que
+        hace el proceso diario (cron bank.debts.overdue-scan-cron). En el gateway:
+        POST /admin/credit-cards/overdue-debts/scan.
+      operationId: scanOverdueDebts
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Deudas notificadas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverdueScanResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token de POST /auth/login (bank-auth-service), validado por el gateway.
+  parameters:
+    CreditCardId:
+      name: id
+      in: path
+      required: true
+      description: Identificador de la tarjeta
+      schema:
+        type: string
+
+  schemas:
+    CardType:
+      type: string
+      enum: [PERSONAL, BUSINESS]
+    CardOperationType:
+      type: string
+      enum: [CHARGE, PAYMENT]
+
+    CreditCardRequest:
+      type: object
+      required: [cardType, customerId, creditLimit]
+      properties:
+        cardType:
+          $ref: '#/components/schemas/CardType'
+        customerId:
+          type: string
+        creditLimit:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        paymentDueDate:
+          type: string
+          format: date
+          description: Parte III, opcional - fecha limite de pago (se fija con el PUT)
+          example: '2026-10-16'
+        dueAmount:
+          type: number
+          minimum: 0
+          description: Parte III, opcional - importe exigible a la fecha limite
+          example: 200
+
+    OverdueScanResponse:
+      type: object
+      properties:
+        productType:
+          type: string
+          example: CREDIT_CARD
+        detected:
+          type: integer
+          format: int64
+          description: Deudas vencidas nuevas notificadas (DEBT_OVERDUE_DETECTED)
+          example: 1
+
+    CreditCardResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        cardNumber:
+          type: string
+          description: Generado, 16 digitos con prefijo configurable, unico
+        cardType:
+          $ref: '#/components/schemas/CardType'
+        customerId:
+          type: string
+        creditLimit:
+          type: number
+        usedAmount:
+          type: number
+        availableBalance:
+          type: number
+          description: creditLimit - usedAmount. Calculado, no se guarda.
+        paymentDueDate:
+          type: string
+          format: date
+        dueAmount:
+          type: number
+          description: Un PAYMENT lo reduce sin bajar de 0
+        overdueNotified:
+          type: boolean
+          description: true si ya se publico DEBT_OVERDUE_DETECTED (vencida y sin saldar)
+        createdAt:
+          type: string
+          format: date-time
+
+    CardBalanceResponse:
+      type: object
+      properties:
+        cardId:
+          type: string
+        cardNumber:
+          type: string
+        creditLimit:
+          type: number
+        usedAmount:
+          type: number
+        availableBalance:
+          type: number
+
+    CardOperationRequest:
+      type: object
+      required: [operation, amount]
+      properties:
+        operation:
+          $ref: '#/components/schemas/CardOperationType'
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Sin token, o token invalido o vencido (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 401
+            error: Unauthorized
+            message: Missing, invalid or expired token
+            path: /customers
+    Forbidden:
+      description: Rol insuficiente o endpoint interno (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 403
+            error: Forbidden
+            message: Insufficient role for this operation
+            path: /customers/68f0a1b2c3d4e5f6a7b8c9d0
+    BadRequest:
+      description: Validacion de entrada fallida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Tarjeta o cliente inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Regla de negocio violada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            overdueDebt:
+              summary: Parte III - cliente con deuda vencida
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Customer 68f0a1b2c3d4e5f6a7b8c9d0 has an overdue debt and cannot acquire new products
+                path: /credit-cards
+            typeMismatch:
+              summary: Tipo de tarjeta distinto al tipo de cliente
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: A PERSONAL customer can only hold PERSONAL credit cards
+                path: /credit-cards
+            limitExceeded:
+              summary: Consumo mayor al saldo disponible
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: The charge exceeds the available balance of card 4532123456789012
+                path: /credit-cards/68f0d4e5f6a7b8c9d0e1f2a3/balance-operations
+    ServiceUnavailable:
+      description: bank-customer-service no disponible (conexion rechazada, timeout de 2 s o circuit breaker abierto)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Error inesperado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

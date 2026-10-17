@@ -1,0 +1,32 @@
+# Configuracion del microservicio del monedero Yanki (Parte III).
+# No llama a otros servicios por REST: se comunica solo por Kafka.
+
+server:
+  port: 8088
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/bank_yanki}
+      auto-index-creation: true
+  kafka:
+    consumer:
+      properties:
+        spring.json.value.default.type: com.bank.yanki.event.EventEnvelope
+        spring.json.trusted.packages: com.bank.yanki.event
+
+bank:
+  yanki:
+    # Tiempo maximo de un pago en PENDING antes de marcarlo FAILED (compensando).
+    payment-timeout: ${YANKI_PAYMENT_TIMEOUT:2m}
+    # Cada cuanto se revisan los pagos colgados, en milisegundos.
+    stale-check-interval-ms: 30000
+  # Publica peticiones de operacion y el resultado de los pagos; consume
+  # tarjetas de debito (copia local) y resultados de operaciones.
+  kafka:
+    published:
+      - operation-requests
+      - yanki-events
+    consumed:
+      - debit-card-events
+      - operation-results

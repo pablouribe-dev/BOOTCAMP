@@ -1,0 +1,669 @@
+openapi: 3.0.3
+info:
+  title: bank-account-service
+  description: |
+    Parte III: todas las rutas pasan por el API Gateway con JWT (Bearer). Sin token o con
+    token invalido o vencido responde 401; con rol insuficiente (USER en PUT o DELETE, o
+    rutas de ADMIN) responde 403.
+
+    Microservicio de cuentas bancarias (productos pasivos): ahorro, corriente y
+    plazo fijo.
+
+    Parte II: perfiles VIP y PYME, monto minimo de apertura, comision por exceso
+    de transacciones (campos de la cuenta), saldos diarios y promedio diario
+    mensual. Se registra en Eureka como `bank-account-service`; consulta a
+    `bank-customer-service` y `bank-credit-card-service` por nombre de Eureka,
+    con circuit breaker y timeout de 2 s (503 si no responden).
+  version: 3.0.0
+security:
+  - bearerAuth: []
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8082
+    description: Directo al servicio (desarrollo)
+tags:
+  - name: Accounts
+    description: CRUD de cuentas, saldo y promedio diario
+  - name: Internal
+    description: Endpoints internos. El API Gateway los bloquea (403); solo los usa bank-transaction-service.
+  - name: Admin
+    description: Parte III - administracion (rol ADMIN)
+
+paths:
+  /accounts:
+    post:
+      tags: [Accounts]
+      summary: Abrir una cuenta
+      description: |
+        Cadena de validaciones, en este orden:
+        0. Parte III: el cliente no puede tener deuda vencida (copia local
+           overdue_debts alimentada por bank.debt.events; sin REST). Si la tiene: 409.
+        1. Reglas por tipo de cliente (Parte I): PERSONAL maximo 1 SAVINGS y 1
+           CURRENT, FIXED_TERM sin limite; BUSINESS solo CURRENT y con holders.
+        2. Reglas del tipo de cuenta: FIXED_TERM exige movementDay.
+        3. Monto de apertura: openingAmount >= minimo del tipo y perfil.
+        4. Perfil VIP: solo SAVINGS y el cliente debe tener una tarjeta de credito.
+        5. Perfil PYME: solo CURRENT (comision de mantenimiento 0) y debe tener
+           una tarjeta de credito.
+
+        El perfil se copia del cliente. freeTransactionLimit y transactionFee se
+        asignan por tipo de cuenta desde la configuracion.
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountRequest'
+            examples:
+              vipSavings:
+                summary: Ahorro VIP (requiere tarjeta y apertura >= 500)
+                value:
+                  accountType: SAVINGS
+                  customerId: 68f0a1b2c3d4e5f6a7b8c9d0
+                  openingAmount: 2000.00
+              pymeCurrent:
+                summary: Corriente PYME (requiere tarjeta, sin mantenimiento)
+                value:
+                  accountType: CURRENT
+                  customerId: 68f0b2c3d4e5f6a7b8c9d0e1
+                  openingAmount: 1000.00
+                  holders:
+                    - documentType: DNI
+                      documentNumber: "45678912"
+                      fullName: Ana Torres
+              personalFixedTerm:
+                summary: Plazo fijo personal
+                value:
+                  accountType: FIXED_TERM
+                  customerId: 68f0a1b2c3d4e5f6a7b8c9d0
+                  openingAmount: 2000.00
+                  movementDay: 15
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '201':
+          description: Cuenta creada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [Accounts]
+      summary: Listar cuentas
+      description: Si llegan ambos filtros, manda accountNumber.
+      operationId: findAllAccounts
+      parameters:
+        - name: customerId
+          in: query
+          required: false
+          description: Filtra las cuentas de un cliente
+          schema:
+            type: string
+        - name: accountNumber
+          in: query
+          required: false
+          description: Busca la cuenta con ese numero (lista de 0 o 1 elemento)
+          schema:
+            type: string
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Lista de cuentas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /accounts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      summary: Buscar una cuenta por id
+      operationId: findAccountById
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Cuenta encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Accounts]
+      summary: Actualizar una cuenta
+      description: |
+        accountType y customerId son inmutables (409 si cambian). Solo se
+        actualizan maintenanceFee, monthlyMovementLimit, movementDay, holders y
+        authorizedSigners. El saldo no se edita: cambia solo con movimientos.
+      operationId: updateAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Cuenta actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Accounts]
+      summary: Eliminar una cuenta (y su historial de saldos diarios)
+      operationId: deleteAccount
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '204':
+          description: Cuenta eliminada
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /accounts/{id}/balance:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      summary: Consultar saldo disponible
+      operationId: getAccountBalance
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Saldo de la cuenta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /accounts/{id}/average-daily-balance:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      summary: Promedio diario del saldo en un mes
+      description: |
+        Para cada dia del mes (desde la apertura de la cuenta y hasta hoy) se
+        toma el ultimo saldo registrado hasta ese dia; los dias sin movimientos
+        arrastran el saldo anterior. Informa si se cumple el minimo VIP, sin
+        aplicar penalidades. Para cuentas sin minimo, meetsMinimum es null.
+      operationId: getAverageDailyBalance
+      parameters:
+        - name: month
+          in: query
+          required: true
+          description: Mes en formato YYYY-MM
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+            example: '2026-10'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Promedio del mes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AverageDailyBalanceResponse'
+              example:
+                accountId: 68f0c3d4e5f6a7b8c9d0e1f2
+                month: '2026-10'
+                averageDailyBalance: 1250.00
+                minimumDailyAverage: 1000
+                meetsMinimum: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: El mes no tiene dias con historial (anterior a la apertura o futuro)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /accounts/{id}/balance-operations:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      tags: [Internal]
+      summary: Aplicar deposito o retiro con comision opcional (interno)
+      description: |
+        Lo invoca bank-transaction-service. Bloqueado por el API Gateway (403).
+        - DEPOSIT: balance += amount - fee
+        - WITHDRAWAL: balance -= amount + fee
+        Se rechaza con 409 si el saldo resultante seria negativo. Actualiza el
+        saldo del dia en daily_balances.
+      operationId: applyAccountBalanceOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BalanceOperationRequest'
+            example:
+              operation: WITHDRAWAL
+              amount: 100.00
+              fee: 1.50
+      responses:
+        '200':
+          description: Saldo resultante
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Llamada externa a traves del API Gateway (endpoint interno)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/events/republish:
+    post:
+      tags: [Admin]
+      summary: Republicar ACCOUNT_UPSERTED de todas las cuentas (ADMIN)
+      description: |
+        Parte III. Vuelve a publicar un snapshot por cada cuenta en bank.account.events.
+        En el gateway: POST /admin/accounts/events/republish.
+
+        Operaciones por Kafka (sin endpoint REST): el servicio consume
+        bank.account.operation-requests (DEPOSIT o WITHDRAWAL pedidos por la tarjeta de
+        debito o Yanki), los aplica con la misma logica de balance-operations sin comision,
+        guarda el resultado en processed_operations (idempotencia por operationId) y publica
+        ACCOUNT_OPERATION_COMPLETED o ACCOUNT_OPERATION_REJECTED (INSUFFICIENT_FUNDS,
+        ACCOUNT_NOT_FOUND) en bank.account.operation-results. Ver bank-docs/docs/events.md.
+      operationId: republishAccountEvents
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Eventos publicados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepublishResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token de POST /auth/login (bank-auth-service), validado por el gateway.
+  parameters:
+    AccountId:
+      name: id
+      in: path
+      required: true
+      description: Identificador de la cuenta
+      schema:
+        type: string
+
+  schemas:
+    AccountType:
+      type: string
+      enum: [SAVINGS, CURRENT, FIXED_TERM]
+    AccountProfile:
+      type: string
+      description: Copiado del perfil del cliente al abrir la cuenta
+      enum: [STANDARD, VIP, PYME]
+    DocumentType:
+      type: string
+      enum: [DNI, CEX, PASSPORT, RUC]
+    BalanceOperationType:
+      type: string
+      enum: [DEPOSIT, WITHDRAWAL]
+
+    Holder:
+      type: object
+      required: [documentType, documentNumber, fullName]
+      properties:
+        documentType:
+          $ref: '#/components/schemas/DocumentType'
+        documentNumber:
+          type: string
+        fullName:
+          type: string
+
+    AccountRequest:
+      type: object
+      required: [accountType, customerId]
+      properties:
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        customerId:
+          type: string
+        openingAmount:
+          type: number
+          minimum: 0
+          description: |
+            Monto de apertura; queda como saldo inicial. Por defecto 0. Debe ser
+            >= al minimo del tipo y perfil. Tambien se acepta el nombre
+            initialBalance de la Parte I.
+        maintenanceFee:
+          type: number
+          minimum: 0
+          description: Solo CURRENT. Si no se envia, se toma el configurado. En PYME siempre es 0.
+        monthlyMovementLimit:
+          type: integer
+          minimum: 1
+          description: Solo SAVINGS. Si no se envia, se toma el configurado.
+        movementDay:
+          type: integer
+          minimum: 1
+          maximum: 28
+          description: Obligatorio en FIXED_TERM.
+        holders:
+          type: array
+          description: Obligatorio (al menos uno) en cuentas BUSINESS.
+          items:
+            $ref: '#/components/schemas/Holder'
+        authorizedSigners:
+          type: array
+          items:
+            $ref: '#/components/schemas/Holder'
+
+    AccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        accountNumber:
+          type: string
+          description: Generado, 14 digitos, unico
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        customerId:
+          type: string
+        balance:
+          type: number
+        maintenanceFee:
+          type: number
+        monthlyMovementLimit:
+          type: integer
+          nullable: true
+        movementDay:
+          type: integer
+          nullable: true
+        holders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Holder'
+        authorizedSigners:
+          type: array
+          items:
+            $ref: '#/components/schemas/Holder'
+        profile:
+          $ref: '#/components/schemas/AccountProfile'
+        openingAmount:
+          type: number
+        minimumDailyAverage:
+          type: number
+          nullable: true
+          description: Solo cuentas VIP
+        freeTransactionLimit:
+          type: integer
+          description: Depositos y retiros al mes sin comision
+        transactionFee:
+          type: number
+          description: Comision por cada deposito o retiro que exceda el maximo gratuito
+        createdAt:
+          type: string
+          format: date-time
+
+    BalanceResponse:
+      type: object
+      properties:
+        accountId:
+          type: string
+        accountNumber:
+          type: string
+        customerId:
+          type: string
+          description: Parte III - cliente dueno de la cuenta
+        accountType:
+          $ref: '#/components/schemas/AccountType'
+        balance:
+          type: number
+
+    RepublishResponse:
+      type: object
+      properties:
+        eventType:
+          type: string
+          example: ACCOUNT_UPSERTED
+        republished:
+          type: integer
+          format: int64
+          example: 17
+
+    AverageDailyBalanceResponse:
+      type: object
+      properties:
+        accountId:
+          type: string
+        month:
+          type: string
+          example: '2026-10'
+        averageDailyBalance:
+          type: number
+        minimumDailyAverage:
+          type: number
+          nullable: true
+        meetsMinimum:
+          type: boolean
+          nullable: true
+          description: null cuando la cuenta no tiene minimo
+
+    BalanceOperationRequest:
+      type: object
+      required: [operation, amount]
+      properties:
+        operation:
+          $ref: '#/components/schemas/BalanceOperationType'
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        fee:
+          type: number
+          minimum: 0
+          description: Comision por exceso de transacciones. Opcional, 0 por defecto.
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Sin token, o token invalido o vencido (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 401
+            error: Unauthorized
+            message: Missing, invalid or expired token
+            path: /customers
+    Forbidden:
+      description: Rol insuficiente o endpoint interno (lo responde el gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 403
+            error: Forbidden
+            message: Insufficient role for this operation
+            path: /customers/68f0a1b2c3d4e5f6a7b8c9d0
+    BadRequest:
+      description: Validacion de entrada fallida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Cuenta o cliente inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Regla de negocio violada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            overdueDebt:
+              summary: Parte III - cliente con deuda vencida
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Customer 68f0a1b2c3d4e5f6a7b8c9d0 has an overdue debt and cannot acquire new products
+                path: /accounts
+            secondSavings:
+              summary: Segunda cuenta de ahorro
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: A personal customer can only hold one SAVINGS account
+                path: /accounts
+            vipWithoutCard:
+              summary: VIP sin tarjeta de credito
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: A VIP account requires the customer to hold a credit card
+                path: /accounts
+            belowOpeningMinimum:
+              summary: Apertura bajo el minimo
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: The opening amount must be at least 500 for a VIP SAVINGS account
+                path: /accounts
+            insufficientFunds:
+              summary: Fondos insuficientes (incluida la comision)
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Insufficient funds in account 12345678901234
+                path: /accounts/68f0c3d4e5f6a7b8c9d0e1f2/balance-operations
+    ServiceUnavailable:
+      description: |
+        bank-customer-service o bank-credit-card-service no disponible: conexion
+        rechazada, timeout de 2 s o circuit breaker abierto.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            timeout:
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 503
+                error: Service Unavailable
+                message: bank-customer-service did not answer within the time limit
+                path: /accounts
+            circuitOpen:
+              value:
+                timestamp: '2026-10-16T10:15:30.123'
+                status: 503
+                error: Service Unavailable
+                message: bank-customer-service is not available (circuit breaker open)
+                path: /accounts
+    InternalError:
+      description: Error inesperado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

@@ -1,0 +1,465 @@
+openapi: 3.0.3
+info:
+  title: bank-yanki-service
+  description: |
+    Parte III. Monedero movil Yanki: pagos entre celulares. No requiere ser cliente
+    del banco ni llama a otros microservicios por REST.
+
+    - Monedero con tarjeta de debito asociada: el saldo vive en la cuenta principal de
+      la tarjeta (se mueve por Kafka con ACCOUNT_OPERATION_REQUESTED). Solo la principal.
+    - Monedero sin tarjeta: usa su propio balance (empieza en 0, no hay recarga).
+    - Si el credito al receptor falla, se compensa el debito al emisor (pago FAILED).
+    - Los pagos que superan el tiempo maximo en PENDING se marcan FAILED (compensando).
+  version: 3.0.0
+servers:
+  - url: http://localhost:8080
+    description: A traves del API Gateway (recomendado)
+  - url: http://localhost:8088
+    description: Directo al servicio (desarrollo)
+security:
+  - bearerAuth: []
+tags:
+  - name: Wallets
+    description: Monederos
+  - name: Payments
+    description: Pagos por numero de celular (asincronos, 202)
+
+paths:
+  /yanki/wallets:
+    post:
+      tags: [Wallets]
+      summary: Crear un monedero (saldo 0)
+      operationId: createWallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletRequest'
+            example:
+              documentType: DNI
+              documentNumber: "45678912"
+              phoneNumber: "987654321"
+              imei: "356938035643809"
+              email: ana@mail.com
+      responses:
+        '201':
+          description: Monedero creado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [Wallets]
+      summary: Listar monederos
+      operationId: findWallets
+      parameters:
+        - name: phoneNumber
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Monederos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WalletResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /yanki/wallets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    get:
+      tags: [Wallets]
+      summary: Buscar un monedero
+      operationId: findWallet
+      responses:
+        '200':
+          description: Monedero
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Wallets]
+      summary: Actualizar datos del monedero (ADMIN)
+      operationId: updateWallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletRequest'
+      responses:
+        '200':
+          description: Monedero actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Wallets]
+      summary: Eliminar un monedero (ADMIN)
+      operationId: deleteWallet
+      responses:
+        '204':
+          description: Eliminado
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /yanki/wallets/{id}/debit-card:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    put:
+      tags: [Wallets]
+      summary: Asociar una tarjeta de debito (ADMIN)
+      description: La tarjeta debe existir en la copia local (debit_cards_replica) y estar ACTIVE.
+      operationId: linkDebitCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardLinkRequest'
+      responses:
+        '200':
+          description: Monedero actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Wallets]
+      summary: Quitar la tarjeta asociada (ADMIN)
+      operationId: unlinkDebitCard
+      responses:
+        '200':
+          description: Monedero actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /yanki/payments:
+    post:
+      tags: [Payments]
+      summary: Enviar un pago por numero de celular
+      description: |
+        Responde 202 con el estado actual: PENDING si espera a las cuentas (tarjeta), o ya
+        COMPLETED / FAILED si todo fue con saldos propios. Consultar luego con el GET.
+      operationId: sendYankiPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YankiPaymentRequest'
+            example:
+              fromPhoneNumber: "912345678"
+              toPhoneNumber: "987654321"
+              amount: 50
+              description: almuerzo
+      responses:
+        '202':
+          description: Pago aceptado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YankiPaymentResponse'
+              example:
+                paymentId: 6ad39001b1c2d3e4f5a6b7c8
+                fromPhoneNumber: "912345678"
+                toPhoneNumber: "987654321"
+                amount: 50
+                status: PENDING
+                step: DEBIT_REQUESTED
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          description: Kafka no acepto la peticion (el pago queda FAILED con KAFKA_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Payments]
+      summary: Historial de pagos
+      operationId: findYankiPayments
+      parameters:
+        - name: phoneNumber
+          in: query
+          required: false
+          description: Como emisor o receptor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pagos, del mas reciente al mas antiguo
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/YankiPaymentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /yanki/payments/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Payments]
+      summary: Estado de un pago
+      operationId: findYankiPayment
+      responses:
+        '200':
+          description: Pago
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YankiPaymentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    WalletId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    DocumentType:
+      type: string
+      enum: [DNI, CEX, PASSPORT]
+    PaymentStatus:
+      type: string
+      enum: [PENDING, COMPLETED, FAILED]
+    PaymentStep:
+      type: string
+      enum: [DEBIT_REQUESTED, CREDIT_REQUESTED, COMPENSATING, DONE]
+    WalletRequest:
+      type: object
+      required: [documentType, documentNumber, phoneNumber, imei, email]
+      properties:
+        documentType:
+          $ref: '#/components/schemas/DocumentType'
+        documentNumber:
+          type: string
+          description: Unico
+        phoneNumber:
+          type: string
+          pattern: '^\d{9}$'
+          description: Unico
+        imei:
+          type: string
+        email:
+          type: string
+          format: email
+    WalletResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        documentType:
+          $ref: '#/components/schemas/DocumentType'
+        documentNumber:
+          type: string
+        phoneNumber:
+          type: string
+        imei:
+          type: string
+        email:
+          type: string
+        balance:
+          type: number
+          description: Saldo propio (sin uso mientras haya tarjeta asociada)
+        debitCardNumber:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    CardLinkRequest:
+      type: object
+      required: [cardNumber]
+      properties:
+        cardNumber:
+          type: string
+    YankiPaymentRequest:
+      type: object
+      required: [fromPhoneNumber, toPhoneNumber, amount]
+      properties:
+        fromPhoneNumber:
+          type: string
+        toPhoneNumber:
+          type: string
+        amount:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+        description:
+          type: string
+    YankiPaymentResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        fromPhoneNumber:
+          type: string
+        toPhoneNumber:
+          type: string
+        amount:
+          type: number
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        step:
+          $ref: '#/components/schemas/PaymentStep'
+        failureReason:
+          type: string
+          example: RECEIVER_CARD_NOT_ACTIVE
+        createdAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+  responses:
+    BadRequest:
+      description: Validacion fallida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Sin token o token invalido o vencido (gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Rol insuficiente (gateway)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Monedero, tarjeta o pago inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: '2026-10-17T10:15:30.123'
+            status: 404
+            error: Not Found
+            message: Wallet not found with phoneNumber 900000001
+            path: /yanki/payments
+    Conflict:
+      description: Regla de negocio violada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            insufficientBalance:
+              summary: Saldo propio insuficiente
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: Insufficient wallet balance
+                path: /yanki/payments
+            samePhone:
+              summary: Mismo celular
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: fromPhoneNumber and toPhoneNumber must be different
+                path: /yanki/payments
+            inactiveCard:
+              summary: Tarjeta asociada inactiva
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: The debit card linked to wallet 912345678 is not active
+                path: /yanki/payments
+            duplicated:
+              summary: Celular o documento repetido
+              value:
+                timestamp: '2026-10-17T10:15:30.123'
+                status: 409
+                error: Conflict
+                message: A wallet with phoneNumber 987654321 already exists
+                path: /yanki/wallets

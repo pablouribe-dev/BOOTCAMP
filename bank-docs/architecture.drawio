@@ -1,0 +1,145 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram id="bank-part3" name="Arquitectura Parte III">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="&lt;b&gt;Sistema bancario — Arquitectura Parte III (proyecto final)&lt;/b&gt;&lt;br&gt;11 microservicios · Spring Boot 3.3 · WebFlux · RxJava 3 · MongoDB reactivo · Config Server · Eureka · Gateway + JWT · Resilience4j · Kafka (KRaft) · Redis" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="350" y="10" width="1200" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Cliente y gateway -->
+        <mxCell id="postman" value="&lt;b&gt;Postman&lt;/b&gt;&lt;br&gt;(bank-postman)&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Authorization: Bearer token&lt;/font&gt;" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="130" width="40" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="gateway" value="&lt;b&gt;bank-api-gateway&lt;/b&gt; :8080 (unico puerto publicado)&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Spring Cloud Gateway + Spring Security (resource server)&lt;br&gt;valida JWT HS256: sin token / invalido / vencido → 401 · rol insuficiente → 403&lt;br&gt;publicos: POST /auth/login, /auth/register, health · ADMIN: /auth/users/**, /admin/**, PUT, DELETE · USER/ADMIN: GET, POST&lt;br&gt;borra X-User-* del cliente y agrega X-User-Id, X-User-Roles, X-Customer-Id, X-User-Phone&lt;br&gt;&lt;b&gt;/**/balance-operations → 403&lt;/b&gt; · /admin/customers|accounts|credits|credit-cards/** → /admin/** del servicio&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="180" y="100" width="760" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="e-postman-gw" value="HTTP :8080 + JWT" style="endArrow=classic;html=1;strokeWidth=2;" edge="1" parent="1" source="postman" target="gateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Infraestructura -->
+        <mxCell id="eureka" value="&lt;b&gt;bank-eureka-server&lt;/b&gt; :8761&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;registro y descubrimiento (lb://)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="100" width="220" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="config" value="&lt;b&gt;bank-config-server&lt;/b&gt; :8888&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;perfil native · bank-config-repo&lt;br&gt;topics, cron, TTL, JWT_SECRET por env&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="165" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="redis" value="&lt;b&gt;Redis&lt;/b&gt; :6379&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;cache-aside de clientes&lt;br&gt;customer:id:{id} · customer:doc:{doc}&lt;br&gt;TTL 10 min · si cae: WARN y MongoDB&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=10;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="100" width="220" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Microservicios REST existentes -->
+        <mxCell id="lane-rest" value="Microservicios de las Partes I y II (REST entre ellos con WebClient @LoadBalanced + circuit breaker y timeout 2 s)" style="swimlane;whiteSpace=wrap;html=1;startSize=25;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="1200" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="customer" value="&lt;b&gt;bank-customer-service&lt;/b&gt; :8081&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;clientes · VIP / PYME&lt;br&gt;publica CUSTOMER_UPSERTED/DELETED&lt;br&gt;POST /admin/events/republish&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-rest">
+          <mxGeometry x="20" y="40" width="220" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="account" value="&lt;b&gt;bank-account-service&lt;/b&gt; :8082&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;cuentas · saldos diarios&lt;br&gt;aplica operaciones por Kafka (idempotente por operationId)&lt;br&gt;regla de deuda vencida (overdue_debts)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-rest">
+          <mxGeometry x="260" y="40" width="250" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="credit" value="&lt;b&gt;bank-credit-service&lt;/b&gt; :8083&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;dueDate · dueAmount&lt;br&gt;@Scheduled diario → DEBT_OVERDUE_*&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-rest">
+          <mxGeometry x="530" y="40" width="200" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="creditcard" value="&lt;b&gt;bank-credit-card-service&lt;/b&gt; :8084&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;paymentDueDate · dueAmount&lt;br&gt;@Scheduled diario → DEBT_OVERDUE_*&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-rest">
+          <mxGeometry x="750" y="40" width="210" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="transaction" value="&lt;b&gt;bank-transaction-service&lt;/b&gt; :8085&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;movimientos · transferencias · reportes&lt;br&gt;pago de terceros (payerCustomerId)&lt;br&gt;movimientos desde eventos (DEBIT_CARD, YANKI)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-rest">
+          <mxGeometry x="980" y="40" width="200" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="db-customer" value="bank_customers" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-rest">
+          <mxGeometry x="70" y="200" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="db-account" value="bank_accounts&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;accounts · daily_balances&lt;br&gt;processed_operations · overdue_debts&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-rest">
+          <mxGeometry x="300" y="200" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="db-credit" value="bank_credits&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;credits · overdue_debts&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-rest">
+          <mxGeometry x="565" y="200" width="130" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="db-creditcard" value="bank_credit_cards&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;credit_cards · overdue_debts&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-rest">
+          <mxGeometry x="785" y="200" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="db-transaction" value="bank_transactions" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-rest">
+          <mxGeometry x="1020" y="200" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="d1" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-rest" source="customer" target="db-customer"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d2" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-rest" source="account" target="db-account"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d3" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-rest" source="credit" target="db-credit"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d4" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-rest" source="creditcard" target="db-creditcard"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d5" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-rest" source="transaction" target="db-transaction"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="r1" value="REST" style="endArrow=classic;html=1;fontSize=9;" edge="1" parent="lane-rest" source="account" target="customer"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="r2" value="REST: cuentas, creditos, tarjetas, clientes (pagador)" style="endArrow=classic;html=1;fontSize=9;exitX=0.5;exitY=0;entryX=0.5;entryY=0;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="lane-rest" source="transaction" target="account"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1080" y="32" /><mxPoint x="385" y="32" /></Array></mxGeometry></mxCell>
+
+        <mxCell id="e-gw-rest" value="lb://bank-*" style="endArrow=classic;html=1;strokeWidth=2;" edge="1" parent="1" source="gateway" target="lane-rest"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e-customer-redis" value="cache" style="endArrow=classic;startArrow=classic;html=1;dashed=1;strokeColor=#b85450;" edge="1" parent="1" source="customer" target="redis"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="160" y="250" /><mxPoint x="1390" y="250" /></Array></mxGeometry></mxCell>
+
+        <!-- Microservicios nuevos -->
+        <mxCell id="lane-new" value="Microservicios nuevos de la Parte III (SIN REST hacia otros servicios: solo Eureka y Kafka)" style="swimlane;whiteSpace=wrap;html=1;startSize=25;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="280" width="580" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="auth" value="&lt;b&gt;bank-auth-service&lt;/b&gt; :8086&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;usuarios (BCrypt) · roles ADMIN/USER&lt;br&gt;emite JWT HS256 (60 min)&lt;br&gt;admin inicial desde env&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-new">
+          <mxGeometry x="15" y="40" width="175" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="debit" value="&lt;b&gt;bank-debit-card-service&lt;/b&gt; :8087&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;tarjetas · cuenta principal&lt;br&gt;pagos 202 con fallback&lt;br&gt;copias: customers, accounts, overdue_debts&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-new">
+          <mxGeometry x="200" y="40" width="185" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="yanki" value="&lt;b&gt;bank-yanki-service&lt;/b&gt; :8088&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;monederos por celular&lt;br&gt;pagos 202 con compensacion&lt;br&gt;copia: debit_cards_replica&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;" vertex="1" parent="lane-new">
+          <mxGeometry x="395" y="40" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="db-auth" value="bank_auth&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;users&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-new">
+          <mxGeometry x="45" y="200" width="115" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="db-debit" value="bank_debit_cards&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;debit_cards · debit_payments&lt;br&gt;*_replica · overdue_debts&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-new">
+          <mxGeometry x="215" y="195" width="155" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="db-yanki" value="bank_yanki&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;wallets · yanki_payments&lt;br&gt;debit_cards_replica&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=8;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="lane-new">
+          <mxGeometry x="410" y="195" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="d6" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-new" source="auth" target="db-auth"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d7" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-new" source="debit" target="db-debit"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d8" style="endArrow=none;html=1;strokeWidth=3;" edge="1" parent="lane-new" source="yanki" target="db-yanki"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e-gw-new" value="lb:// /auth/** /debit-cards/** /yanki/**" style="endArrow=classic;html=1;strokeWidth=2;" edge="1" parent="1" source="gateway" target="lane-new"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="940" y="240" /><mxPoint x="1570" y="240" /></Array></mxGeometry></mxCell>
+
+        <!-- Kafka -->
+        <mxCell id="kafka" value="&lt;b&gt;Apache Kafka&lt;/b&gt; :9092 (KRaft, sin Zookeeper) · sobre comun {eventId, eventType, occurredAt, payload} · clave = id del agregado · at-least-once + processed_events · reintentos con backoff y luego &amp;lt;topic&amp;gt;.DLT" style="swimlane;whiteSpace=wrap;html=1;startSize=30;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="40" y="660" width="1820" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="t-customer" value="&lt;b&gt;bank.customer.events&lt;/b&gt;&lt;br&gt;customer → debit-card&lt;br&gt;CUSTOMER_UPSERTED / DELETED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="kafka">
+          <mxGeometry x="20" y="50" width="230" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="t-account" value="&lt;b&gt;bank.account.events&lt;/b&gt;&lt;br&gt;account → debit-card&lt;br&gt;ACCOUNT_UPSERTED / DELETED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="kafka">
+          <mxGeometry x="270" y="50" width="230" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="t-debt" value="&lt;b&gt;bank.debt.events&lt;/b&gt;&lt;br&gt;credit, credit-card → account, credit, credit-card, debit-card&lt;br&gt;DEBT_OVERDUE_DETECTED / CLEARED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="kafka">
+          <mxGeometry x="520" y="50" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="t-debitcard" value="&lt;b&gt;bank.debit-card.events&lt;/b&gt;&lt;br&gt;debit-card → yanki&lt;br&gt;DEBIT_CARD_UPSERTED / DELETED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="kafka">
+          <mxGeometry x="840" y="50" width="230" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="t-requests" value="&lt;b&gt;bank.account.operation-requests&lt;/b&gt;&lt;br&gt;debit-card, yanki → account (key accountId)&lt;br&gt;ACCOUNT_OPERATION_REQUESTED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="kafka">
+          <mxGeometry x="1090" y="50" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="t-results" value="&lt;b&gt;bank.account.operation-results&lt;/b&gt;&lt;br&gt;account → debit-card, yanki, transaction&lt;br&gt;ACCOUNT_OPERATION_COMPLETED / REJECTED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="kafka">
+          <mxGeometry x="1370" y="50" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="t-yanki" value="&lt;b&gt;bank.yanki.events&lt;/b&gt;&lt;br&gt;yanki → (informativo)&lt;br&gt;YANKI_PAYMENT_COMPLETED / FAILED" style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="kafka">
+          <mxGeometry x="1650" y="50" width="155" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="kafka-note" value="Cada consumidor tiene su group-id (= nombre del servicio) y guarda los eventId procesados. Los topics tienen 3 particiones; cada topic consumido tiene su .DLT." style="text;html=1;fontSize=10;align=left;" vertex="1" parent="kafka">
+          <mxGeometry x="20" y="130" width="1000" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="k1" value="publica / consume" style="endArrow=classic;startArrow=classic;html=1;dashed=1;strokeColor=#d79b00;strokeWidth=2;fontSize=9;" edge="1" parent="1" source="lane-rest" target="kafka"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="k2" value="publica / consume" style="endArrow=classic;startArrow=classic;html=1;dashed=1;strokeColor=#d79b00;strokeWidth=2;fontSize=9;" edge="1" parent="1" source="lane-new" target="kafka"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- Leyenda -->
+        <mxCell id="legend" value="&lt;b&gt;Leyenda&lt;/b&gt;&lt;br&gt;&lt;b&gt;──►&lt;/b&gt; HTTP / REST (WebClient por nombre de Eureka, circuit breaker + timeout 2 s)&lt;br&gt;&lt;font color=&quot;#d79b00&quot;&gt;&lt;b&gt;- - ►&lt;/b&gt;&lt;/font&gt; Kafka (eventos asincronos)&lt;br&gt;&lt;font color=&quot;#b85450&quot;&gt;&lt;b&gt;- - ►&lt;/b&gt;&lt;/font&gt; cache Redis&lt;br&gt;&lt;b&gt;══&lt;/b&gt; acceso a su propia base (database per service; las copias locales se alimentan por eventos)&lt;br&gt;&lt;br&gt;En Docker solo se publica el gateway (8080): los servicios no validan el JWT porque solo se llega a ellos por el gateway.&lt;br&gt;Todos los servicios se registran en Eureka y leen su configuracion del Config Server." style="text;html=1;align=left;verticalAlign=top;fontSize=11;spacing=8;rounded=1;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="40" y="900" width="900" height="150" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,243 @@
+# Sistema bancario completo (Partes I, II y III) en Docker.
+#
+# Uso, desde esta carpeta:
+#   cp .env.example .env       # y cambiar los secretos (el .env no se sube al repo)
+#   docker compose up -d --build
+#   docker compose ps          # esperar a que todos esten "healthy"
+#
+# Entrada unica: el API Gateway en http://localhost:8080. Es el UNICO puerto
+# publicado: los microservicios, Eureka, Kafka, Redis y MongoDB solo son
+# accesibles dentro de la red de Docker. Por eso basta con validar el JWT en el
+# gateway.
+#
+# Orden de arranque garantizado con depends_on + healthchecks:
+#   mongo, kafka, redis, config-server -> eureka-server
+#   -> customer, auth -> credit-card, credit -> account -> transaction
+#   -> debit-card -> yanki -> api-gateway
+#
+# Secretos (JWT_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD) solo en .env.
+
+x-business-env: &business-env
+  CONFIG_SERVER_URL: http://config-server:8888
+  EUREKA_URL: http://eureka-server:8761/eureka
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  # Zona horaria del negocio: define "hoy" (dia del plazo fijo, mes de las
+  # comisiones, reportes del dia, deudas vencidas). Sin esto los contenedores
+  # usan UTC.
+  TZ: ${BANK_TZ:-America/Lima}
+
+x-healthcheck: &healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 18
+  start_period: 40s
+
+services:
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Kafka oficial en modo KRaft (sin Zookeeper), nodo unico.
+  kafka:
+    image: apache/kafka:3.9.0
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  # Cache de clientes: sin persistencia, un reinicio nunca devuelve datos viejos.
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  config-server:
+    build: ../../bank-config-server
+    environment:
+      CONFIG_REPO_PATH: /config-repo
+    volumes:
+      # El config repo se monta de solo lectura: no se copia a la imagen.
+      - ../../bank-config-repo:/config-repo:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8888/actuator/health | grep -q UP"]
+
+  eureka-server:
+    build: ../../bank-eureka-server
+    environment:
+      CONFIG_SERVER_URL: http://config-server:8888
+      EUREKA_HOSTNAME: eureka-server
+    depends_on:
+      config-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8761/actuator/health | grep -q UP"]
+
+  customer-service:
+    build: ../../bank-customer-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_customers
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health | grep -q UP"]
+
+  auth-service:
+    build: ../../bank-auth-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_auth
+      JWT_SECRET: ${JWT_SECRET:?define JWT_SECRET en .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?define ADMIN_USERNAME en .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?define ADMIN_PASSWORD en .env}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8086/actuator/health | grep -q UP"]
+
+  credit-card-service:
+    build: ../../bank-credit-card-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_credit_cards
+    depends_on:
+      customer-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health | grep -q UP"]
+
+  credit-service:
+    build: ../../bank-credit-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_credits
+    depends_on:
+      customer-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health | grep -q UP"]
+
+  account-service:
+    build: ../../bank-account-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_accounts
+    depends_on:
+      customer-service:
+        condition: service_healthy
+      credit-card-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q UP"]
+
+  transaction-service:
+    build: ../../bank-transaction-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_transactions
+    depends_on:
+      account-service:
+        condition: service_healthy
+      credit-service:
+        condition: service_healthy
+      credit-card-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/actuator/health | grep -q UP"]
+
+  debit-card-service:
+    build: ../../bank-debit-card-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_debit_cards
+    depends_on:
+      account-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8087/actuator/health | grep -q UP"]
+
+  yanki-service:
+    build: ../../bank-yanki-service
+    environment:
+      <<: *business-env
+      MONGO_URI: mongodb://mongo:27017/bank_yanki
+    depends_on:
+      debit-card-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8088/actuator/health | grep -q UP"]
+
+  api-gateway:
+    build: ../../bank-api-gateway
+    environment:
+      <<: *business-env
+      JWT_SECRET: ${JWT_SECRET:?define JWT_SECRET en .env}
+    ports:
+      - "8080:8080"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      transaction-service:
+        condition: service_healthy
+      yanki-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+
+volumes:
+  mongo-data:
+  kafka-data:
